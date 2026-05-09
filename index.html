@@ -2,116 +2,136 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My YouTube Filter - 選別エディタ</title>
+    <title>YouTube選別ダッシュボード</title>
     <style>
-        body { font-family: sans-serif; background: #f4f4f9; padding: 20px; }
-        .container { max-width: 800px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        .input-group { display: flex; gap: 10px; margin-bottom: 20px; }
-        input, select { padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
-        input[type="text"] { flex-grow: 1; }
-        button { padding: 10px 20px; cursor: pointer; background: #2563eb; color: white; border: none; border-radius: 4px; }
-        button:hover { background: #1d4ed8; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border-bottom: 1px solid #ddd; padding: 12px; text-align: left; }
-        .rank-S { color: gold; font-weight: bold; }
-        .rank-解除 { background: #fee2e2; color: #ef4444; }
-        .memo { font-size: 0.85em; color: #666; }
-        .sync-info { margin-top: 20px; font-size: 0.8em; color: #888; border-top: 1px solid #eee; padding-top: 10px; }
+        body { font-family: sans-serif; padding: 20px; background: #f0f2f5; color: #333; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 600px; margin: auto; }
+        .hidden { display: none; }
+        input { width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 6px; box-sizing: border-box; }
+        button { width: 100%; padding: 12px; background: #1a73e8; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #1557b0; }
+        .channel-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
+        .channel-info { display: flex; align-items: center; }
+        .channel-thumb { width: 40px; height: 40px; border-radius: 50%; margin-right: 12px; }
+        .tag-area select { padding: 5px; border-radius: 4px; }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h2>📺 配信者・選別ダッシュボード</h2>
-    <p>「人格が苦手」「音がいい」など、あなた独自の基準で棚卸しします。</p>
-
-    <!-- 入力エリア -->
-    <div class="input-group">
-        <input type="text" id="channelName" placeholder="配信者名またはURL">
-        <select id="rank">
-            <option value="S">S: 殿堂入り</option>
-            <option value="A">A: 有益(要加工)</option>
-            <option value="B">B: 精査中</option>
-            <option value="解除候補">解除候補</option>
-        </select>
-        <input type="text" id="memo" placeholder="理由（例：声がうるさい）">
-        <button onclick="addChannel()">追加</button>
+<div class="card">
+    <!-- 1. 初期設定画面（初回のみ表示） -->
+    <div id="setup-view" class="hidden">
+        <h2>🔧 初期設定</h2>
+        <p>Google Cloudで取得した情報を入力してください。この情報はあなたのブラウザのみに保存されます。</p>
+        <input type="text" id="input-api-key" placeholder="YouTube API Key">
+        <input type="text" id="input-client-id" placeholder="OAuth Client ID">
+        <button onclick="saveSettings()">設定を保存して開始</button>
     </div>
 
-    <!-- リスト表示 -->
-    <table>
-        <thead>
-            <tr>
-                <th>配信者</th>
-                <th>ランク</th>
-                <th>メモ</th>
-                <th>操作</th>
-            </tr>
-        </thead>
-        <tbody id="listBody"></tbody>
-    </table>
-
-    <!-- 同期に関するメモ -->
-    <div class="sync-info">
-        <p>※ 現在はブラウザ(LocalStorage)に保存されています。将来的にGoogle Drive同期を実装予定。</p>
-        <button onclick="exportJSON()" style="background:#059669">データを書き出し(JSON)</button>
+    <!-- 2. メイン操作画面 -->
+    <div id="main-view" class="hidden">
+        <h2>📺 登録チャンネル棚卸し</h2>
+        <p id="user-status">未ログイン</p>
+        <button id="auth-btn" onclick="handleAuthClick()">Googleアカウントで同期</button>
+        <div id="channel-list" style="margin-top: 20px;"></div>
+        <button onclick="clearSettings()" style="margin-top: 20px; background: #666;">設定をリセット</button>
     </div>
 </div>
 
+<script async defer src="https://apis.google.com/js/api.js" onload="gapiLoaded()"></script>
+<script async defer src="https://accounts.google.com/gsi/client" onload="gisLoaded()"></script>
+
 <script>
-    let channels = JSON.parse(localStorage.getItem('myYoutubeFilter')) || [];
+    let SETTINGS = JSON.parse(localStorage.getItem('yt_filter_settings')) || null;
+    let tokenClient;
 
-    function render() {
-        const body = document.getElementById('listBody');
-        body.innerHTML = '';
-        channels.forEach((item, index) => {
-            const tr = document.createElement('tr');
-            tr.className = item.rank === '解除候補' ? 'rank-解除' : '';
-            tr.innerHTML = `
-                <td><strong>${item.name}</strong></td>
-                <td><span class="rank-${item.rank}">${item.rank}</span></td>
-                <td class="memo">${item.memo}</td>
-                <td><button onclick="deleteChannel(${index})" style="background:#dc2626; padding:4px 8px; font-size:12px;">削除</button></td>
-            `;
-            body.appendChild(tr);
-        });
-        localStorage.setItem('myYoutubeFilter', JSON.stringify(channels));
+    // 起動時に設定があるかチェック
+    window.onload = () => {
+        if (!SETTINGS) {
+            document.getElementById('setup-view').classList.remove('hidden');
+        } else {
+            document.getElementById('main-view').classList.remove('hidden');
+        }
+    };
+
+    function saveSettings() {
+        const apiKey = document.getElementById('input-api-key').value;
+        const clientId = document.getElementById('input-client-id').value;
+        if (!apiKey || !clientId) return alert('両方入力してください');
+
+        SETTINGS = { apiKey, clientId };
+        localStorage.setItem('yt_filter_settings', JSON.stringify(SETTINGS));
+        location.reload(); // 再読み込みして反映
     }
 
-    function addChannel() {
-        const name = document.getElementById('channelName').value;
-        const rank = document.getElementById('rank').value;
-        const memo = document.getElementById('memo').value;
-        if (!name) return alert('名前を入力してください');
-        
-        channels.push({ name, rank, memo, date: new Date().toISOString() });
-        render();
-        
-        // フォームクリア
-        document.getElementById('channelName').value = '';
-        document.getElementById('memo').value = '';
-    }
-
-    function deleteChannel(index) {
-        if(confirm('削除しますか？')) {
-            channels.splice(index, 1);
-            render();
+    function clearSettings() {
+        if (confirm('設定をリセットしますか？')) {
+            localStorage.removeItem('yt_filter_settings');
+            location.reload();
         }
     }
 
-    function exportJSON() {
-        const data = JSON.stringify(channels, null, 2);
-        const blob = new Blob([data], {type: 'application/json'});
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'youtube-filter-settings.json';
-        a.click();
+    // Google API 初期化系
+    function gapiLoaded() { gapi.load('client', async () => {
+        if (SETTINGS) {
+            await gapi.client.init({
+                apiKey: SETTINGS.apiKey,
+                discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/youtube/v3/rest'],
+            });
+        }
+    }); }
+
+    function gisLoaded() {
+        if (SETTINGS) {
+            tokenClient = google.accounts.oauth2.initTokenClient({
+                client_id: SETTINGS.clientId,
+                scope: 'https://www.googleapis.com/auth/youtube.readonly',
+                callback: (resp) => { if (resp.access_token) listSubscriptions(); }
+            });
+        }
     }
 
-    // 初回表示
-    render();
+    function handleAuthClick() {
+        tokenClient.requestAccessToken({prompt: 'consent'});
+    }
+
+    async function listSubscriptions() {
+        const response = await gapi.client.youtube.subscriptions.list({
+            part: 'snippet',
+            mine: true,
+            maxResults: 50
+        });
+
+        const listDiv = document.getElementById('channel-list');
+        listDiv.innerHTML = '<h3>登録チャンネル一覧</h3>';
+        
+        response.result.items.forEach(item => {
+            const snip = item.snippet;
+            const div = document.createElement('div');
+            div.className = 'channel-item';
+            div.innerHTML = `
+                <div class="channel-info">
+                    <img src="${snip.thumbnails.default.url}" class="channel-thumb">
+                    <span>${snip.title}</span>
+                </div>
+                <div class="tag-area">
+                    <select onchange="saveTag('${item.id}', this.value)">
+                        <option value="">未分類</option>
+                        <option value="S">S: 快適</option>
+                        <option value="A">A: 内容のみ</option>
+                        <option value="C">C: ブロック</option>
+                    </select>
+                </div>
+            `;
+            listDiv.appendChild(div);
+        });
+        document.getElementById('auth-btn').innerText = 'リスト更新';
+    }
+
+    function saveTag(id, tag) {
+        // ここにタグ保存ロジック（LocalStorageやGoogleドライブ）を入れる
+        console.log(`Saved: ${id} as ${tag}`);
+    }
 </script>
 
 </body>
